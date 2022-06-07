@@ -10,17 +10,34 @@ public class HSet4<E> implements IHSet<E>{
     Ref.View<Node<T>> next = STM.newRef(null);
   }
 
-  private Ref.View<TArray.View<Node<E>>> table;
+  private final Ref.View<TArray.View<Node<E>>> table;
   private final Ref.View<Integer> size;
 
   public HSet4(int h_size) {
     table = STM.newRef(STM.newTArray(h_size));
     size = STM.newRef(0); 
   }
+
   
   private Node<E> getEntry(E elem){
-	  return table.get().apply(Math.abs(elem.hashCode() % capacity()));  
+	  return table.get().apply(getIndex(elem));  
   }
+  
+  private int getIndex(E elem) {
+	  return Math.abs(elem.hashCode() % table.get().length());
+  }
+  
+  private boolean nodeContains(Node<E> start, E elem) {
+	  return STM.atomic(()->{ 
+		 Node<E> node = start;
+		  while(node != null) {
+			  if(node.value.equals(elem)) return true;
+			  node = node.next.get();
+		  }
+		  return false;
+	  });
+  }
+
 
   @Override
   public int capacity() {
@@ -38,16 +55,17 @@ public class HSet4<E> implements IHSet<E>{
       throw new IllegalArgumentException();
     }
     return STM.atomic(()-> {
-    	if(table.get().length() != capacity()) {
-    		Node<E> node = new Node<E>();
-    		Node<E> head = table.get().apply(0);
-    		node.value = elem;
-    		node.next = STM.newRef(head);
-    		head.prev = STM.newRef(node);
-        	STM.increment(size, 1);
-        	return true;
-    	}
-    	else return false;
+    		Node<E> oldNode = getEntry(elem);
+    		boolean r = !contains(elem);
+    		if(r) {
+        		Node<E> node = new Node<E>();
+        		node.value = elem;
+        		node.next.set(oldNode); 
+        		if(oldNode !=null) oldNode.prev.set(node); 
+        		table.get().update(getIndex(elem), node);
+            	STM.increment(size, 1);
+    		}
+        	return r;
     });
   }
 
@@ -57,35 +75,41 @@ public class HSet4<E> implements IHSet<E>{
       throw new IllegalArgumentException();
     }
     return STM.atomic(() -> {
-    	Node<E> node = getEntry(elem);
-    	if(node != null) {
-	    	Node<E> prev = node.prev.get();
-	    	Node<E> next = node.next.get();
-	    	prev.next = STM.newRef(next);
-	    	next.prev = STM.newRef(prev);
-	    	STM.increment(size, -1);
+		Node<E> oldNode = getEntry(elem);
+		while(oldNode != null) {
+			if(oldNode.value.equals(elem)) {
+	    	Node<E> prev = oldNode.prev.get();
+	    	Node<E> next = oldNode.next.get();
+
+	    	if(next != null) { next.prev.set(prev); }
+	    	if(prev != null) { prev.next.set(next);  }
+	    	else { table.get().update(getIndex(elem), next); }
+
+    		STM.increment(size, -1);
 	    	return true;
+			}
+			oldNode = oldNode.next.get();
+    	}
+    	return false;
+    });
+  }
+  
+  @Override
+  public boolean contains(E elem) {
+	  if (elem == null) {
+	      throw new IllegalArgumentException();
 	    }
-    	else return false;
+    return STM.atomic(() -> {
+    	return nodeContains(getEntry(elem), elem);
     });
   }
 
-  @Override
-  public boolean contains(E elem) {
-    if (elem == null) {
-      throw new IllegalArgumentException();
-    }
-    return STM.atomic(() -> {
-    	if(getEntry(elem) != null) return true;
-    	else return false;
-    });
-  }
 
   @Override
   public void waitFor(E elem) {
-    if (elem == null) {
-      throw new IllegalArgumentException();
-    }
+	  if (elem == null) {
+	      throw new IllegalArgumentException();
+	    }
     STM.atomic(() -> {
     	while(!contains(elem))
     		STM.retry();
@@ -95,10 +119,15 @@ public class HSet4<E> implements IHSet<E>{
   @Override
   public void rehash() {
     STM.atomic(() -> {
-    	Ref.View<TArray.View<Node<E>>> oldTable = table;
-    	table = STM.newRef(STM.newTArray(2 * oldTable.get().length()));
-    	for(int i=0; i< oldTable.get().length(); i++) {
-    		table.get().update(i, oldTable.get().apply(i));
+    	TArray.View<Node<E>> oldTable = table.get();
+    	table.set(STM.newTArray(2 * oldTable.length()));
+    	
+    	for(int i=0; i<oldTable.length(); i++) {
+    		Node<E> head = oldTable.apply(i);
+    		while(head!=null) {
+    			add(head.value);
+    			head = head.next.get();
+    		}
     	}
     });
   }
