@@ -1,4 +1,4 @@
-import scala.concurrent.stm.Ref;
+mport scala.concurrent.stm.Ref;
 import scala.concurrent.stm.TArray;
 import scala.concurrent.stm.japi.STM;
 
@@ -121,7 +121,7 @@ public class HSet4<E> implements IHSet<E>{
     STM.atomic(() -> {
     	TArray.View<Node<E>> oldTable = table.get();
     	table.set(STM.newTArray(2 * oldTable.length()));
-    	
+    	size.set(0);
     	for(int i=0; i<oldTable.length(); i++) {
     		Node<E> head = oldTable.apply(i);
     		while(head!=null) {
